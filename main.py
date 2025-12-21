@@ -5,15 +5,21 @@ from vector_db_manager import VectorDBManager
 
 def main(): 
     
-    vec = VectorDBManager()
-    vec.check_database_exists()
-    # vec.initialize_database()
-    # vec.check_database_exists()
-   
-    # llm = LLM(model="llama3.2", temperature=0.7)
-    # chat = ChatCLI(llm)
-    # chat.run()
+    db_manager = VectorDBManager(persist_directory="./chroma_db")
+    
+    db_manager.run_load_documents(
+        lane_name="lane_1",
+        collection_name="restaurant_data",
+        lane_folder="./data",
+        embedding_model="mxbai-embed-large"
+    )
+    
+    db_manager.list_lanes()
+    db_manager.get_stats()
 
+    llm = LLM(model="llama3.2", temperature=0.7)
+    chat = ChatCLI(llm)
+    chat.run()
 
 
 
