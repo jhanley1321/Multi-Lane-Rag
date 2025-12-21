@@ -4,7 +4,6 @@ from vector_db_manager import VectorDBManager
 
 
 def main(): 
-    
     db_manager = VectorDBManager(persist_directory="./chroma_db")
     
     db_manager.run_load_documents(
@@ -15,12 +14,10 @@ def main():
     )
     
     db_manager.list_lanes()
-    db_manager.get_stats()
-
-    llm = LLM(model="llama3.2", temperature=0.7)
+    
+    llm = LLM(model="llama3.2", temperature=0.7, vector_db=db_manager)
     chat = ChatCLI(llm)
     chat.run()
-
 
 
 if __name__ == "__main__":
