@@ -3,6 +3,7 @@ from typing import Optional, List, Dict
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
 from langchain_community.document_loaders import CSVLoader
+from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import json
 
@@ -115,6 +116,30 @@ class VectorDBManager:
         documents = loader.load()
         return documents
 
+
+    def _load_json_file(self, file_path: str) -> List:
+        """
+        Load a JSON file into documents.
+        Handles arbitrary JSON structures by converting the entire content to a string.
+        
+        Args:
+            file_path: Path to the JSON file
+            
+        Returns:
+            List of documents loaded from the JSON
+        """
+        with open(file_path, 'r', encoding='utf-8') as f:
+            json_data = json.load(f)
+        
+        json_string = json.dumps(json_data, indent=2)
+        
+        doc = Document(
+            page_content=json_string,
+            metadata={"source": file_path}
+        )
+        
+        return [doc]
+
     def _chunk_documents(self, documents: List, chunk_size: int = 1000, chunk_overlap: int = 200) -> List:
         """
         Chunk documents into smaller pieces.
@@ -187,6 +212,8 @@ class VectorDBManager:
         
         if file_extension == '.csv':
             documents = self._load_csv_file(file_path)
+        elif file_extension == '.json':
+            documents = self._load_json_file(file_path)
         else:
             print(f"⚠️ Unsupported file type: {file_extension}")
             return
