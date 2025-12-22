@@ -1,8 +1,9 @@
 from pathlib import Path
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Union
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
 from langchain_community.document_loaders import CSVLoader
+from langchain_core.documents import Document
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import json
@@ -115,6 +116,30 @@ class VectorDBManager:
         loader = CSVLoader(file_path=file_path)
         documents = loader.load()
         return documents
+
+
+    def _load_json_file(self, file_path: str) -> List:
+        """
+        Load a JSON file into documents.
+        Handles arbitrary JSON structures by converting the entire content to a string.
+        
+        Args:
+            file_path: Path to the JSON file
+            
+        Returns:
+            List of documents loaded from the JSON
+        """
+        with open(file_path, 'r', encoding='utf-8') as f:
+            json_data = json.load(f)
+        
+        json_string = json.dumps(json_data, indent=2)
+        
+        doc = Document(
+            page_content=json_string,
+            metadata={"source": file_path}
+        )
+        
+        return [doc]
 
 
     def _load_json_file(self, file_path: str) -> List:
@@ -474,13 +499,16 @@ class VectorDBManager:
         
         print(f"\n✅ Document loading workflow complete!")
 
-    def search(self, query: str, lane_name: Optional[str] = None, k: int = 3) -> List:
+    def search(self, query: str, lane_name: Optional[Union[str, List[str]]] = None, k: int = 3) -> List:
         """
         Search for relevant documents in the vector database.
         
         Args:
             query: The search query
-            lane_name: Optional lane to search in (searches all if None)
+            lane_name: Lane(s) to search in. Can be:
+                       - None or "all": Search all lanes (default)
+                       - str: Search specific lane (e.g., "lane_1")
+                       - List[str]: Search multiple lanes (e.g., ["lane_1", "user_chat"])
             k: Number of documents to return
         
         Returns:
@@ -492,7 +520,12 @@ class VectorDBManager:
         
         results = self.vectorstore.similarity_search(query=query, k=k)
         
-        if lane_name:
+        if lane_name is None or lane_name == "all":
+            return results
+        
+        if isinstance(lane_name, str):
             results = [doc for doc in results if doc.metadata.get('lane') == lane_name]
+        elif isinstance(lane_name, list):
+            results = [doc for doc in results if doc.metadata.get('lane') in lane_name]
         
         return results

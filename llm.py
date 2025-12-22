@@ -1,5 +1,5 @@
 from langchain_ollama import ChatOllama
-from typing import Optional
+from typing import Optional, Union, List
 
 class LLM:
     def __init__(self, model: str = "llama3.2", temperature: float = 0.7, vector_db = None):
@@ -9,7 +9,7 @@ class LLM:
         )
         self.vector_db = vector_db
     
-    def send_message(self, message: str, use_rag: bool = True, lane_name: Optional[str] = None) -> str:
+    def send_message(self, message: str, use_rag: bool = True, lane_name: Optional[Union[str, List[str]]] = None) -> str:
         if use_rag and self.vector_db:
             docs = self.vector_db.search(message, lane_name=lane_name, k=3)
             if docs:
