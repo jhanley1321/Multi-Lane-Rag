@@ -1,5 +1,9 @@
 from langchain_ollama import ChatOllama
 
+# We need to make this LLM piece work more liek somethign you just plugin
+# you shoudl be able 
+
+
 class LLM:
     def __init__(self, model: str = "llama3.2", temperature: float = 0.7):
         self.llm = ChatOllama(

@@ -183,3 +183,4 @@ cython_debug/
 
 # Ignore Folders
 /chat_logs
+/data

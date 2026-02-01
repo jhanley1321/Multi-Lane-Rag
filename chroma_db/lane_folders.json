@@ -1,4 +1,5 @@
 {
   "lane_1": "./data",
-  "user_chat": "./chat_logs"
+  "user_chat": "./chat_logs",
+  "test_lane": "./test_data"
 }

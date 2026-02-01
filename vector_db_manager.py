@@ -8,347 +8,161 @@ from langchain_core.documents import Document
 import json
 
 
-class VectorDBManager:
-    """
-    Manages vector database operations with multi-lane support.
-    Each lane contains isolated collections for different data sources.
-    """
-
-    def __init__(self, vectorstore: Optional[Chroma] = None, persist_directory: str = "./chroma_db"):
-        """
-        Initialize the VectorDBManager.
-        
-        Args:
-            vectorstore: Optional Chroma vectorstore instance to manage
-            persist_directory: Directory where the vector database is stored
-        """
-        self.vectorstore = vectorstore
-        self.persist_directory = persist_directory
-        self.lanes: Dict[str, List[str]] = {}
-        self.lanes_config_path = Path(persist_directory) / "lanes_config.json"
-        self._load_lanes_config()
-
-    def _load_lanes_config(self) -> None:
-        """Load lane configuration from disk if it exists."""
+class ConfigManager:
+    """Manages configuration persistence for lanes and folders."""
+    
+    def __init__(self, persist_directory: str):
+        self.persist_directory = Path(persist_directory)
+        self.lanes_config_path = self.persist_directory / "lanes_config.json"
+        self.lane_folders_path = self.persist_directory / "lane_folders.json"
+    
+    def load_lanes(self) -> Dict[str, List[str]]:
+        """Load lane configuration."""
         if self.lanes_config_path.exists():
             with open(self.lanes_config_path, 'r') as f:
-                self.lanes = json.load(f)
-
-    def _save_lanes_config(self) -> None:
-        """Save lane configuration to disk."""
-        self.lanes_config_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.lanes_config_path, 'w') as f:
-            json.dump(self.lanes, f, indent=2)
-
-    def _load_lane_folders_config(self) -> Dict[str, str]:
-        """Load lane folder mappings from config."""
-        lane_folders_path = Path(self.persist_directory) / "lane_folders.json"
-        if lane_folders_path.exists():
-            with open(lane_folders_path, 'r') as f:
                 return json.load(f)
         return {}
-
-    def _save_lane_folders_config(self, lane_folders: Dict[str, str]) -> None:
-        """Save lane folder mappings to config."""
-        lane_folders_path = Path(self.persist_directory) / "lane_folders.json"
-        lane_folders_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(lane_folders_path, 'w') as f:
+    
+    def save_lanes(self, lanes: Dict[str, List[str]]) -> None:
+        """Save lane configuration."""
+        self.lanes_config_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.lanes_config_path, 'w') as f:
+            json.dump(lanes, f, indent=2)
+    
+    def load_lane_folders(self) -> Dict[str, str]:
+        """Load lane folder mappings."""
+        if self.lane_folders_path.exists():
+            with open(self.lane_folders_path, 'r') as f:
+                return json.load(f)
+        return {}
+    
+    def save_lane_folders(self, lane_folders: Dict[str, str]) -> None:
+        """Save lane folder mappings."""
+        self.lane_folders_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.lane_folders_path, 'w') as f:
             json.dump(lane_folders, f, indent=2)
 
-    def _ensure_database_loaded(self, embedding_model: str) -> None:
-        """Ensure the database is loaded, initialize if needed."""
-        if not self.vectorstore:
-            print("⚠️ No vectorstore loaded. Initializing database...")
-            self.initialize_database(embedding_model=embedding_model)
 
-    def _ensure_lane_exists(self, lane_name: str) -> None:
-        """Ensure the lane exists, create if needed."""
-        if lane_name not in self.lanes:
-            print(f"⚠️ Lane '{lane_name}' does not exist. Creating it...")
-            self.create_lane(lane_name)
-
-    def _ensure_collection_exists(self, lane_name: str, collection_name: str) -> None:
-        """Ensure the collection exists in the lane, add if needed."""
-        if collection_name not in self.lanes[lane_name]:
-            print(f"⚠️ Collection '{collection_name}' not in lane '{lane_name}'. Adding it...")
-            self.add_collection_to_lane(lane_name, collection_name)
-
-    def _get_default_collection_name(self, lane_name: str) -> str:
-        """Get default collection name for a lane (uses lane name)."""
-        return lane_name
-
-    def _ensure_lane_folder_set(self, lane_name: str, lane_folder: Optional[str] = None) -> str:
-        """
-        Ensure lane folder is set, either from parameter or from config.
+class DocumentLoader:
+    """Loads and processes documents from various file formats."""
+    
+    def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        self.text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap
+        )
+    
+    def load_file(self, file_path: str) -> List[Document]:
+        """Load a file based on its extension."""
+        file_path_obj = Path(file_path)
         
-        Args:
-            lane_name: Name of the lane
-            lane_folder: Optional folder path to use
-            
-        Returns:
-            The folder path for the lane
-            
-        Raises:
-            ValueError: If no folder is set and none provided
-        """
-        if lane_folder:
-            return lane_folder
+        if not file_path_obj.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
         
-        folder = self.get_lane_folder(lane_name)
-        if not folder:
-            raise ValueError(
-                f"No folder set for lane '{lane_name}'. "
-                f"Please provide lane_folder parameter or use set_lane_folder() first."
-            )
-        return folder
-
-    def _load_csv_file(self, file_path: str) -> List:
-        """
-        Load a CSV file into documents.
+        file_extension = file_path_obj.suffix.lower()
         
-        Args:
-            file_path: Path to the CSV file
-            
-        Returns:
-            List of documents loaded from the CSV
-        """
+        if file_extension == '.csv':
+            return self._load_csv(file_path)
+        elif file_extension == '.json':
+            return self._load_json(file_path)
+        else:
+            raise ValueError(f"Unsupported file type: {file_extension}")
+    
+    def _load_csv(self, file_path: str) -> List[Document]:
+        """Load CSV file."""
         loader = CSVLoader(file_path=file_path)
-        documents = loader.load()
-        return documents
-
-    def _load_json_file(self, file_path: str) -> List:
-        """
-        Load a JSON file into documents.
-        Handles arbitrary JSON structures by converting the entire content to a string.
-        
-        Args:
-            file_path: Path to the JSON file
-            
-        Returns:
-            List of documents loaded from the JSON
-        """
+        return loader.load()
+    
+    def _load_json(self, file_path: str) -> List[Document]:
+        """Load JSON file."""
         with open(file_path, 'r', encoding='utf-8') as f:
             json_data = json.load(f)
         
         json_string = json.dumps(json_data, indent=2)
-        
         doc = Document(
             page_content=json_string,
             metadata={"source": file_path}
         )
-        
         return [doc]
-
-    def _chunk_documents(self, documents: List, chunk_size: int = 1000, chunk_overlap: int = 200) -> List:
-        """
-        Chunk documents into smaller pieces.
-        
-        Args:
-            documents: List of documents to chunk
-            chunk_size: Size of each chunk
-            chunk_overlap: Overlap between chunks
-            
-        Returns:
-            List of chunked documents
-        """
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap
-        )
-        chunks = text_splitter.split_documents(documents)
-        return chunks
-
-    def _add_metadata_to_documents(self, documents: List, lane_name: str, collection_name: str, file_path: str) -> List:
-        """
-        Add metadata to documents.
-        
-        Args:
-            documents: List of documents
-            lane_name: Name of the lane
-            collection_name: Name of the collection
-            file_path: Path to the source file
-            
-        Returns:
-            List of documents with added metadata
-        """
+    
+    def chunk_documents(self, documents: List[Document]) -> List[Document]:
+        """Chunk documents into smaller pieces."""
+        return self.text_splitter.split_documents(documents)
+    
+    def add_metadata(
+        self, 
+        documents: List[Document], 
+        lane_name: str, 
+        collection_name: str, 
+        file_path: str
+    ) -> List[Document]:
+        """Add metadata to documents."""
         for doc in documents:
             doc.metadata['lane'] = lane_name
             doc.metadata['collection'] = collection_name
             doc.metadata['source_file'] = Path(file_path).name
         return documents
 
-    def _add_documents_to_collection(self, documents: List) -> None:
-        """
-        Add documents to the vectorstore.
-        
-        Args:
-            documents: List of documents to add
-        """
-        if not self.vectorstore:
-            print("⚠️ No vectorstore loaded")
-            return
-        
-        self.vectorstore.add_documents(documents)
-        print(f"✅ Added {len(documents)} chunks to vectorstore")
 
-    def _load_document_file(self, file_path: str, lane_name: str, collection_name: str) -> None:
-        """
-        Load a document file into the vectorstore.
-        Orchestrates loading, chunking, metadata addition, and storage.
-        
-        Args:
-            file_path: Path to the document file
-            lane_name: Name of the lane
-            collection_name: Name of the collection
-        """
-        file_path_obj = Path(file_path)
-        
-        if not file_path_obj.exists():
-            print(f"⚠️ File not found: {file_path}")
-            return
-        
-        file_extension = file_path_obj.suffix.lower()
-        
-        if file_extension == '.csv':
-            documents = self._load_csv_file(file_path)
-        elif file_extension == '.json':
-            documents = self._load_json_file(file_path)
-        else:
-            print(f"⚠️ Unsupported file type: {file_extension}")
-            return
-        
-        chunks = self._chunk_documents(documents)
-        chunks = self._add_metadata_to_documents(chunks, lane_name, collection_name, file_path)
-        self._add_documents_to_collection(chunks)
-
-    def set_vectorstore(self, vectorstore: Chroma) -> None:
-        """
-        Set the vectorstore instance.
-        
-        Args:
-            vectorstore: Chroma vectorstore instance
-        """
-        self.vectorstore = vectorstore
-        print("✅ Vectorstore set successfully")
-
-    def check_database_exists(self) -> bool:
-        """
-        Check if the vector database exists.
-        
-        Returns:
-            True if database exists, False otherwise
-        """
-        db_path = Path(self.persist_directory)
-        exists = db_path.exists() and any(db_path.iterdir())
-        
-        if exists:
-            print(f"✅ Database exists at: {self.persist_directory}")
-        else:
-            print(f"⚠️ Database does not exist at: {self.persist_directory}")
-        
-        return exists
-
-    def initialize_database(self, embedding_model: str = "nomic-embed-text") -> None:
-        """
-        Initialize a new vector database.
-        
-        Args:
-            embedding_model: Name of the embedding model to use
-        """
-        print(f"🔧 Initializing database at: {self.persist_directory}")
-        print(f"📦 Using embedding model: {embedding_model}")
-        
-        embeddings = OllamaEmbeddings(model=embedding_model)
-        
-        self.vectorstore = Chroma(
-            persist_directory=self.persist_directory,
-            embedding_function=embeddings
-        )
-        
-        print("✅ Database initialized successfully")
-
+class LaneManager:
+    """Manages lanes and their collections."""
+    
+    def __init__(self, config_manager: ConfigManager):
+        self.config_manager = config_manager
+        self.lanes: Dict[str, List[str]] = config_manager.load_lanes()
+        self.lane_folders: Dict[str, str] = config_manager.load_lane_folders()
+    
     def create_lane(self, lane_name: str) -> None:
-        """
-        Create a new lane.
-        
-        Args:
-            lane_name: Name of the lane to create
-        """
+        """Create a new lane."""
         if lane_name in self.lanes:
             print(f"⚠️ Lane '{lane_name}' already exists")
             return
         
         self.lanes[lane_name] = []
-        self._save_lanes_config()
+        self.config_manager.save_lanes(self.lanes)
         print(f"✅ Created lane: {lane_name}")
-
-    def get_lane_collections(self, lane_name: str) -> List[str]:
-        """
-        Get all collections in a lane.
-        
-        Args:
-            lane_name: Name of the lane
-            
-        Returns:
-            List of collection names in the lane
-        """
+    
+    def lane_exists(self, lane_name: str) -> bool:
+        """Check if lane exists."""
+        return lane_name in self.lanes
+    
+    def add_collection(self, lane_name: str, collection_name: str) -> None:
+        """Add a collection to a lane."""
         if lane_name not in self.lanes:
-            print(f"⚠️ Lane '{lane_name}' does not exist")
-            return []
-        
-        return self.lanes[lane_name]
-
-    def add_collection_to_lane(self, lane_name: str, collection_name: str) -> None:
-        """
-        Add a collection to a lane.
-        
-        Args:
-            lane_name: Name of the lane
-            collection_name: Name of the collection to add
-        """
-        if lane_name not in self.lanes:
-            print(f"⚠️ Lane '{lane_name}' does not exist. Create it first.")
-            return
+            raise ValueError(f"Lane '{lane_name}' does not exist")
         
         if collection_name in self.lanes[lane_name]:
             print(f"⚠️ Collection '{collection_name}' already exists in lane '{lane_name}'")
             return
         
         self.lanes[lane_name].append(collection_name)
-        self._save_lanes_config()
+        self.config_manager.save_lanes(self.lanes)
         print(f"✅ Added collection '{collection_name}' to lane '{lane_name}'")
-
+    
+    def collection_exists(self, lane_name: str, collection_name: str) -> bool:
+        """Check if collection exists in lane."""
+        return lane_name in self.lanes and collection_name in self.lanes[lane_name]
+    
+    def get_collections(self, lane_name: str) -> List[str]:
+        """Get all collections in a lane."""
+        return self.lanes.get(lane_name, [])
+    
     def set_lane_folder(self, lane_name: str, folder_path: str) -> None:
-        """
-        Set the folder path for a lane.
-        
-        Args:
-            lane_name: Name of the lane
-            folder_path: Path to the folder containing lane documents
-        """
+        """Set folder path for a lane."""
         if lane_name not in self.lanes:
-            print(f"⚠️ Lane '{lane_name}' does not exist. Create it first.")
-            return
+            raise ValueError(f"Lane '{lane_name}' does not exist")
         
-        lane_folders = self._load_lane_folders_config()
-        lane_folders[lane_name] = folder_path
-        self._save_lane_folders_config(lane_folders)
+        self.lane_folders[lane_name] = folder_path
+        self.config_manager.save_lane_folders(self.lane_folders)
         print(f"✅ Set folder for lane '{lane_name}': {folder_path}")
-
+    
     def get_lane_folder(self, lane_name: str) -> Optional[str]:
-        """
-        Get the folder path for a lane.
-        
-        Args:
-            lane_name: Name of the lane
-            
-        Returns:
-            Folder path for the lane, or None if not set
-        """
-        lane_folders = self._load_lane_folders_config()
-        return lane_folders.get(lane_name)
-
-    def list_lanes(self) -> None:
+        """Get folder path for a lane."""
+        return self.lane_folders.get(lane_name)
+    
+    def list_all(self) -> None:
         """List all lanes and their collections."""
         if not self.lanes:
             print("⚠️ No lanes exist")
@@ -365,181 +179,156 @@ class VectorDBManager:
             else:
                 print(f"    (no collections)")
 
-    def view_contents(self) -> None:
-        """View the contents of the vector database."""
-        if not self.vectorstore:
-            print("⚠️ No vectorstore loaded")
-            return
-        
-        print("\n📊 Database Contents:")
-        collection = self.vectorstore._collection
-        print(f"Total documents: {collection.count()}")
 
+class VectorStoreManager:
+    """Manages Chroma vectorstore operations."""
+    
+    def __init__(self, persist_directory: str):
+        self.persist_directory = persist_directory
+        self.vectorstore: Optional[Chroma] = None
+    
+    def exists(self) -> bool:
+        """Check if database exists."""
+        db_path = Path(self.persist_directory)
+        exists = db_path.exists() and any(db_path.iterdir())
+        
+        if exists:
+            print(f"✅ Database exists at: {self.persist_directory}")
+        else:
+            print(f"⚠️ Database does not exist at: {self.persist_directory}")
+        
+        return exists
+    
+    def initialize(self, embedding_model: str = "nomic-embed-text") -> None:
+        """Initialize a new vector database."""
+        print(f"🔧 Initializing database at: {self.persist_directory}")
+        print(f"📦 Using embedding model: {embedding_model}")
+        
+        embeddings = OllamaEmbeddings(model=embedding_model)
+        self.vectorstore = Chroma(
+            persist_directory=self.persist_directory,
+            embedding_function=embeddings
+        )
+        
+        print("✅ Database initialized successfully")
+    
+    def load(self, embedding_model: str = "nomic-embed-text") -> None:
+        """Load an existing database."""
+        if not self.exists():
+            raise ValueError("Cannot load database - it does not exist")
+        
+        print(f"📂 Loading existing database from: {self.persist_directory}")
+        print(f"📦 Using embedding model: {embedding_model}")
+        
+        embeddings = OllamaEmbeddings(model=embedding_model)
+        self.vectorstore = Chroma(
+            persist_directory=self.persist_directory,
+            embedding_function=embeddings
+        )
+        
+        print("✅ Database loaded successfully")
+    
+    def add_documents(self, documents: List[Document]) -> None:
+        """Add documents to vectorstore."""
+        if not self.vectorstore:
+            raise ValueError("No vectorstore loaded")
+        
+        self.vectorstore.add_documents(documents)
+        print(f"✅ Added {len(documents)} chunks to vectorstore")
+    
+    def search(
+        self,
+        query: str,
+        lane_name: Optional[Union[str, List[str]]] = None,
+        k: int = 3
+    ) -> List[Document]:
+        """Search the vectorstore."""
+        if not self.vectorstore:
+            raise ValueError("No vectorstore loaded")
+        
+        if lane_name is None or lane_name == "all":
+            return self.vectorstore.similarity_search(query, k=k)
+        elif isinstance(lane_name, str):
+            return self.vectorstore.similarity_search(
+                query, k=k, filter={"lane": lane_name}
+            )
+        elif isinstance(lane_name, list):
+            return self.vectorstore.similarity_search(
+                query, k=k, filter={"lane": {"$in": lane_name}}
+            )
+        else:
+            raise ValueError(f"Invalid lane_name type: {type(lane_name)}")
+    
     def get_stats(self) -> Dict:
-        """
-        Get statistics about the vector database.
-        
-        Returns:
-            Dictionary containing database statistics
-        """
+        """Get database statistics."""
         if not self.vectorstore:
-            print("⚠️ No vectorstore loaded")
-            return {}
+            return {"total_documents": 0}
         
         collection = self.vectorstore._collection
-        count = collection.count()
-        
-        stats = {
-            "total_documents": count,
-            "lanes": len(self.lanes),
-            "persist_directory": self.persist_directory
-        }
-        
-        print("\n📊 Database Statistics:")
-        print(f"  Total documents: {stats['total_documents']}")
-        print(f"  Total lanes: {stats['lanes']}")
-        print(f"  Persist directory: {stats['persist_directory']}")
-        
-        return stats
-
-    def clear_database(self) -> None:
-        """Clear all data from the vector database."""
-        if not self.vectorstore:
-            print("⚠️ No vectorstore loaded")
-            return
-        
+        return {"total_documents": collection.count()}
+    
+    def clear(self) -> None:
+        """Clear all data from the database."""
         import shutil
         if Path(self.persist_directory).exists():
             shutil.rmtree(self.persist_directory)
             print(f"✅ Cleared database at: {self.persist_directory}")
         
         self.vectorstore = None
-        self.lanes = {}
 
-    def _run_load_documents_full_workflow(
-        self, 
-        lane_name: str, 
-        collection_name: Optional[str] = None,
-        file_paths: Optional[List[str]] = None,
-        lane_folder: Optional[str] = None,
-        embedding_model: str = "nomic-embed-text"
-    ) -> None:
-        """
-        Comprehensive workflow to load documents into a lane and collection.
-        Handles: database initialization, lane creation, folder setting, collection creation, and document loading.
-        
-        Args:
-            lane_name: Name of the lane to load into
-            collection_name: Name of the collection (defaults to lane name if not provided)
-            file_paths: List of specific file paths to load (if None, loads all files from lane folder)
-            lane_folder: Folder path for the lane (uses default if not provided)
-            embedding_model: Embedding model to use if database needs initialization
-        """
-        print(f"\n🚀 Starting full document load workflow for lane: {lane_name}")
-        
-        self._ensure_database_loaded(embedding_model)
-        self._ensure_lane_exists(lane_name)
-        
-        if lane_folder:
-            self.set_lane_folder(lane_name, lane_folder)
-        
-        folder = self._ensure_lane_folder_set(lane_name, lane_folder)
-        print(f"📁 Lane folder: {folder}")
-        
-        if collection_name is None:
-            collection_name = lane_name
-            print(f"📋 Using lane name as collection name: {collection_name}")
-        
-        self._ensure_collection_exists(lane_name, collection_name)
-        
-        if file_paths is None:
-            folder_path = Path(folder)
-            if not folder_path.exists():
-                print(f"⚠️ Lane folder does not exist: {folder}")
-                print(f"   Please create the folder and add files, or specify file_paths explicitly")
-                return
-            
-            file_paths = [str(f) for f in folder_path.iterdir() if f.is_file()]
-            print(f"📋 Found {len(file_paths)} files in lane folder")
-        
-        if not file_paths:
-            print(f"⚠️ No files to load")
-            return
-        
-        print(f"📋 Loading {len(file_paths)} document(s)...")
-        for file_path in file_paths:
-            print(f"  Processing: {Path(file_path).name}")
-            self._load_document_file(file_path, lane_name, collection_name)
-        
-        print(f"\n✅ Document loading workflow complete!")
 
+class VectorDBManager:
+    """
+    Main interface for vector database operations.
+    Orchestrates ConfigManager, DocumentLoader, LaneManager, and VectorStoreManager.
+    """
+    
+    def __init__(self, persist_directory: str = "./chroma_db"):
+        self.persist_directory = persist_directory
+        
+        self.config_manager = ConfigManager(persist_directory)
+        self.document_loader = DocumentLoader()
+        self.lane_manager = LaneManager(self.config_manager)
+        self.vectorstore_manager = VectorStoreManager(persist_directory)
+    
     def run_initialize(
         self,
         lanes_config: Dict[str, str],
         embedding_model: str = "nomic-embed-text"
     ) -> None:
-        """
-        Initialize the vector database and set up lanes.
-        One-time setup method - does not load documents.
-        
-        Args:
-            lanes_config: Dictionary mapping lane names to folder paths
-                         e.g., {"lane_1": "./data", "user_chat": "./chat_logs"}
-            embedding_model: Embedding model to use for the database
-        
-        Example:
-            manager.run_initialize(
-                lanes_config={"lane_1": "./data", "user_chat": "./chat_logs"},
-                embedding_model="mxbai-embed-large"
-            )
-        """
+        """Initialize database and set up lanes."""
         print("\n🔧 Initializing vector database system...")
         
-        if not self.vectorstore:
-            self.initialize_database(embedding_model=embedding_model)
+        if not self.vectorstore_manager.vectorstore:
+            self.vectorstore_manager.initialize(embedding_model=embedding_model)
         else:
             print("✅ Database already initialized")
         
         for lane_name, folder_path in lanes_config.items():
-            if lane_name not in self.lanes:
-                self.create_lane(lane_name)
+            if not self.lane_manager.lane_exists(lane_name):
+                self.lane_manager.create_lane(lane_name)
             else:
                 print(f"⚠️ Lane '{lane_name}' already exists")
             
-            self.set_lane_folder(lane_name, folder_path)
+            self.lane_manager.set_lane_folder(lane_name, folder_path)
         
         print("\n✅ Initialization complete!")
-        self.list_lanes()
-
+        self.lane_manager.list_all()
+    
     def run_add_documents(
         self,
         lane_name: str,
         collection_name: Optional[str] = None,
         file_paths: Optional[List[str]] = None
     ) -> None:
-        """
-        Add documents to an existing lane and collection.
-        Assumes database and lane are already set up.
-        
-        Args:
-            lane_name: Name of the lane to add documents to
-            collection_name: Name of the collection (defaults to lane name if not provided)
-            file_paths: List of specific file paths to load (if None, loads all files from lane folder)
-        
-        Example:
-            manager.run_add_documents(
-                lane_name="lane_1",
-                collection_name="restaurant_data",
-                file_paths=["./data/new_reviews.csv"]
-            )
-        """
+        """Add documents to an existing lane and collection."""
         print(f"\n📥 Adding documents to lane: {lane_name}")
         
-        if not self.vectorstore:
+        if not self.vectorstore_manager.vectorstore:
             print("❌ Error: No vectorstore loaded. Run run_initialize() first.")
             return
         
-        if lane_name not in self.lanes:
+        if not self.lane_manager.lane_exists(lane_name):
             print(f"❌ Error: Lane '{lane_name}' does not exist. Run run_initialize() first.")
             return
         
@@ -547,10 +336,11 @@ class VectorDBManager:
             collection_name = lane_name
             print(f"📋 Using lane name as collection name: {collection_name}")
         
-        self._ensure_collection_exists(lane_name, collection_name)
+        if not self.lane_manager.collection_exists(lane_name, collection_name):
+            self.lane_manager.add_collection(lane_name, collection_name)
         
         if file_paths is None:
-            folder = self.get_lane_folder(lane_name)
+            folder = self.lane_manager.get_lane_folder(lane_name)
             if not folder:
                 print(f"❌ Error: No folder set for lane '{lane_name}'")
                 return
@@ -570,113 +360,60 @@ class VectorDBManager:
         print(f"📋 Loading {len(file_paths)} document(s)...")
         for file_path in file_paths:
             print(f"  Processing: {Path(file_path).name}")
-            self._load_document_file(file_path, lane_name, collection_name)
+            self._process_file(file_path, lane_name, collection_name)
         
         print(f"\n✅ Documents added successfully!")
-
+    
     def run_query(
         self,
         query: str,
         lane_name: Optional[Union[str, List[str]]] = None,
         k: int = 3
-    ) -> List:
-        """
-        Query the vector database for relevant documents.
-        Assumes database is already set up and loaded with documents.
-        
-        Args:
-            query: The search query
-            lane_name: Lane(s) to search in. Can be:
-                       - None or "all": Search all lanes (default)
-                       - str: Search specific lane (e.g., "lane_1")
-                       - List[str]: Search multiple lanes (e.g., ["lane_1", "user_chat"])
-            k: Number of documents to return
-        
-        Returns:
-            List of relevant documents
-        
-        Example:
-            results = manager.run_query(
-                query="What's the best restaurant?",
-                lane_name="lane_1",
-                k=5
-            )
-        """
+    ) -> List[Document]:
+        """Query the vector database."""
         print(f"\n🔍 Querying database...")
         
-        if not self.vectorstore:
+        if not self.vectorstore_manager.vectorstore:
             print("❌ Error: No vectorstore loaded. Run run_initialize() first.")
             return []
         
-        results = self.search(query=query, lane_name=lane_name, k=k)
-        
+        results = self.vectorstore_manager.search(query=query, lane_name=lane_name, k=k)
         print(f"✅ Found {len(results)} relevant document(s)")
         
         return results
-
-    def search(
-        self,
-        query: str,
-        lane_name: Optional[Union[str, List[str]]] = None,
-        k: int = 3
-    ) -> List:
-        """
-        Search the vector database for relevant documents.
-        
-        Args:
-            query: The search query
-            lane_name: Lane(s) to search in. Can be:
-                       - None or "all": Search all lanes (default)
-                       - str: Search specific lane (e.g., "lane_1")
-                       - List[str]: Search multiple lanes (e.g., ["lane_1", "user_chat"])
-            k: Number of documents to return
-        
-        Returns:
-            List of relevant documents
-        """
-        if not self.vectorstore:
-            print("⚠️ No vectorstore loaded")
-            return []
-        
-        if lane_name is None or lane_name == "all":
-            results = self.vectorstore.similarity_search(query, k=k)
-        elif isinstance(lane_name, str):
-            results = self.vectorstore.similarity_search(
-                query,
-                k=k,
-                filter={"lane": lane_name}
+    
+    def _process_file(self, file_path: str, lane_name: str, collection_name: str) -> None:
+        """Process a single file: load, chunk, add metadata, store."""
+        try:
+            documents = self.document_loader.load_file(file_path)
+            chunks = self.document_loader.chunk_documents(documents)
+            chunks = self.document_loader.add_metadata(
+                chunks, lane_name, collection_name, file_path
             )
-        elif isinstance(lane_name, list):
-            results = self.vectorstore.similarity_search(
-                query,
-                k=k,
-                filter={"lane": {"$in": lane_name}}
-            )
-        else:
-            print(f"⚠️ Invalid lane_name type: {type(lane_name)}")
-            return []
+            self.vectorstore_manager.add_documents(chunks)
+            
+        except Exception as e:
+            print(f"⚠️ Error processing {file_path}: {e}")
+    
+    def list_lanes(self) -> None:
+        """List all lanes and their collections."""
+        self.lane_manager.list_all()
+    
+    def get_stats(self) -> Dict:
+        """Get database statistics."""
+        stats = self.vectorstore_manager.get_stats()
+        stats['lanes'] = len(self.lane_manager.lanes)
+        stats['persist_directory'] = self.persist_directory
         
-        return results
-
-    def load_existing_database(self, embedding_model: str = "nomic-embed-text") -> None:
-        """
-        Load an existing vector database from disk.
+        print("\n📊 Database Statistics:")
+        print(f"  Total documents: {stats['total_documents']}")
+        print(f"  Total lanes: {stats['lanes']}")
+        print(f"  Persist directory: {stats['persist_directory']}")
         
-        Args:
-            embedding_model: Name of the embedding model to use
-        """
-        if not self.check_database_exists():
-            print("⚠️ Cannot load database - it does not exist")
-            return
-        
-        print(f"📂 Loading existing database from: {self.persist_directory}")
-        print(f"📦 Using embedding model: {embedding_model}")
-        
-        embeddings = OllamaEmbeddings(model=embedding_model)
-        
-        self.vectorstore = Chroma(
-            persist_directory=self.persist_directory,
-            embedding_function=embeddings
-        )
-        
-        print("✅ Database loaded successfully")
+        return stats
+    
+    def clear_database(self) -> None:
+        """Clear all data from the database."""
+        self.vectorstore_manager.clear()
+        self.lane_manager.lanes = {}
+        self.lane_manager.lane_folders = {}
