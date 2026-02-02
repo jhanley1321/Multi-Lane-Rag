@@ -1,8 +1,3 @@
-# from llm import LLM
-# from cli import ChatCLI
-from vector_db_manager import VectorDBManager
-
-
 from rag_manager import RAGManager
 
 
@@ -12,7 +7,7 @@ def main():
     
     
     # Initialize RAGManager
-    rag = RAGManager(persist_directory="./chroma_db")
+    rag = RAGManager(persist_directory="./chroma_db", chunk_size=2000, chunk_overlap=400)
     
     # Clear existing database to start fresh
     rag.vector_db.clear_database()
